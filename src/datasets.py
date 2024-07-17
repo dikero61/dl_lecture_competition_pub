@@ -19,6 +19,11 @@ class ThingsMEGDataset(torch.utils.data.Dataset):
         if split in ["train", "val"]:
             self.y = torch.load(os.path.join(data_dir, f"{split}_y.pt"))
             assert len(torch.unique(self.y)) == self.num_classes, "Number of classes do not match."
+        
+        for idx in self.subject_idxs.unique():
+            is_target = self.subject_idxs == idx
+            num_target = int(is_target.sum()) // 10
+            self.X[is_target, :, :] -= torch.mean(self.X[is_target, :, :][:num_target, :, :], dim=0)
 
     def __len__(self) -> int:
         return len(self.X)

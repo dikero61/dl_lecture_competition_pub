@@ -8,10 +8,12 @@ from omegaconf import DictConfig
 import wandb
 from termcolor import cprint
 from tqdm import tqdm
+from torchvision import transforms
 
 from src.datasets import ThingsMEGDataset
 from src.models import BasicConvClassifier
 from src.utils import set_seed
+from src.preprocess import NoiseCancel
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
@@ -21,7 +23,11 @@ def run(args: DictConfig):
     
     if args.use_wandb:
         wandb.init(mode="online", dir=logdir, project="MEG-classification")
-
+    
+    # ------------------
+    #    Preprocessing
+    # ------------------
+    # transform = transforms.Compose([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))]) # 謎のフィルタリング：0.1509 
     # ------------------
     #    Dataloader
     # ------------------
@@ -40,8 +46,10 @@ def run(args: DictConfig):
     #       Model
     # ------------------
     model = BasicConvClassifier(
-        train_set.num_classes, train_set.seq_len, train_set.num_channels
+        train_set.num_classes, train_set.seq_len, train_set.num_channels, hid_dim=128
     ).to(args.device)
+    
+    alpha = 1e-3
 
     # ------------------
     #     Optimizer
@@ -55,7 +63,7 @@ def run(args: DictConfig):
     accuracy = Accuracy(
         task="multiclass", num_classes=train_set.num_classes, top_k=10
     ).to(args.device)
-      
+    
     for epoch in range(args.epochs):
         print(f"Epoch {epoch+1}/{args.epochs}")
         
@@ -67,7 +75,11 @@ def run(args: DictConfig):
 
             y_pred = model(X)
             
-            loss = F.cross_entropy(y_pred, y)
+            l2 = torch.tensor(0., requires_grad=True)
+            for w in model.parameters():
+                l2 = l2 + torch.norm(w)**2
+            
+            loss = F.cross_entropy(y_pred, y) + alpha*l2
             train_loss.append(loss.item())
             
             optimizer.zero_grad()
@@ -84,7 +96,12 @@ def run(args: DictConfig):
             with torch.no_grad():
                 y_pred = model(X)
             
-            val_loss.append(F.cross_entropy(y_pred, y).item())
+            l2 = torch.tensor(0., requires_grad=True)
+            for w in model.parameters():
+                l2 = l2 + torch.norm(w)**2
+            
+            loss = F.cross_entropy(y_pred, y) + alpha*l2
+            val_loss.append(loss.item())
             val_acc.append(accuracy(y_pred, y).item())
 
         print(f"Epoch {epoch+1}/{args.epochs} | train loss: {np.mean(train_loss):.3f} | train acc: {np.mean(train_acc):.3f} | val loss: {np.mean(val_loss):.3f} | val acc: {np.mean(val_acc):.3f}")
@@ -105,11 +122,12 @@ def run(args: DictConfig):
 
     preds = [] 
     model.eval()
-    for X, subject_idxs in tqdm(test_loader, desc="Validation"):        
+    for X, subject_idxs in tqdm(test_loader, desc="Validation"):
         preds.append(model(X.to(args.device)).detach().cpu())
         
     preds = torch.cat(preds, dim=0).numpy()
     np.save(os.path.join(logdir, "submission"), preds)
+    np.save("/content/drive/MyDrive/Colab Notebooks/DLBasics2024_colab/final/dl_lecture_competition_pub/submission.npy", preds)
     cprint(f"Submission {preds.shape} saved at {logdir}", "cyan")
 
 
